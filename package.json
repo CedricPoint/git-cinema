@@ -1,0 +1,34 @@
+{
+  "name": "git-cinema",
+  "version": "1.0.0",
+  "description": "Turn any git history into a film: an animated, self-contained HTML player you can record to 1080p video. Zero dependencies.",
+  "bin": {
+    "git-cinema": "git-cinema.js"
+  },
+  "main": "git-cinema.js",
+  "files": [
+    "git-cinema.js",
+    "player.html"
+  ],
+  "scripts": {
+    "test": "node --test test/git-cinema.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "git",
+    "visualization",
+    "gource",
+    "animation",
+    "history",
+    "cli",
+    "video"
+  ],
+  "author": "CedricPoint",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CedricPoint/git-cinema.git"
+  }
+}

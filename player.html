@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>git-cinema</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#05060a;overflow:hidden;color:#e8ecf4;font:14px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+canvas{display:block;width:100vw;height:100vh;object-fit:contain;background:#05060a}
+#ui{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);display:flex;align-items:center;gap:10px;padding:10px 14px;
+  background:rgba(12,14,22,.78);border:1px solid rgba(255,255,255,.1);border-radius:14px;backdrop-filter:blur(10px);
+  transition:opacity .4s;width:min(860px,calc(100vw - 24px))}
+#ui.hide{opacity:0;pointer-events:none}
+button,select{background:rgba(255,255,255,.08);color:#e8ecf4;border:1px solid rgba(255,255,255,.12);border-radius:9px;
+  font:600 13px ui-sans-serif,system-ui,sans-serif;padding:7px 11px;cursor:pointer;white-space:nowrap}
+button:hover{background:rgba(255,255,255,.16)}
+button.rec{background:#e5484d;border-color:#e5484d}
+#bar{flex:1;height:22px;position:relative;cursor:pointer;min-width:60px}
+#bar::before{content:"";position:absolute;left:0;right:0;top:9px;height:4px;border-radius:2px;background:rgba(255,255,255,.14)}
+#fill{position:absolute;left:0;top:9px;height:4px;border-radius:2px;background:linear-gradient(90deg,#7c5cff,#26d7ff)}
+#knob{position:absolute;top:4px;width:14px;height:14px;margin-left:-7px;border-radius:50%;background:#fff;box-shadow:0 0 12px #7c5cffaa}
+#msg{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:#e5484d;color:#fff;font-weight:700;padding:8px 14px;border-radius:10px;display:none}
+@media (max-width:640px){#ui{flex-wrap:wrap}#bar{order:-1;flex-basis:100%}}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="msg"></div>
+<div id="ui">
+  <button id="play" title="Play / pause (space)">⏸</button>
+  <div id="bar" title="Seek"><div id="fill"></div><div id="knob"></div></div>
+  <select id="speed" title="Speed (+ / −)">
+    <option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option>
+    <option value="2">2×</option><option value="4">4×</option><option value="8">8×</option>
+  </select>
+  <button id="labels" title="Toggle labels (L)">Aa</button>
+  <button id="record" title="Record the whole film as a video">● Record 1080p</button>
+  <button id="snap" title="Save a PNG snapshot (S)">📸</button>
+</div>
+<script id="data" type="application/json">/*__GIT_CINEMA_DATA__*/</script>
+<script>
+'use strict';
+const D = JSON.parse(document.getElementById('data').textContent);
+const cv = document.getElementById('c'), g = cv.getContext('2d');
+const TAU = Math.PI * 2, GOLDEN = 2.399963229728653, DAY = 86400;
+
+/* ---------------- colors ---------------- */
+const EXT_COLORS = {js:'#f7df1e',mjs:'#f7df1e',cjs:'#f7df1e',jsx:'#61dafb',ts:'#3b82f6',tsx:'#38bdf8',vue:'#41b883',svelte:'#ff3e00',
+  py:'#4b8bbe',rb:'#e0115f',php:'#8892bf',java:'#f89820',kt:'#a97bff',go:'#00add8',rs:'#dea584',c:'#a8b9cc',h:'#8fa3b8',cpp:'#f34b7d',
+  cc:'#f34b7d',hpp:'#d96b8f',cs:'#9b4f96',swift:'#f05138',dart:'#00b4ab',lua:'#6b6bff',sh:'#89e051',css:'#a26bfa',scss:'#cf649a',
+  less:'#5b7bd5',html:'#e34c26',md:'#c9d1d9',mdx:'#c9d1d9',json:'#9ca3af',yml:'#cb171e',yaml:'#cb171e',toml:'#9c4221',xml:'#0060ac',
+  sql:'#e38c00',png:'#22c55e',jpg:'#22c55e',svg:'#ffb13b',txt:'#8b949e',lock:'#4b5563'};
+function hashHue(s){ let h = 0; for (const ch of s) h = (h * 31 + ch.charCodeAt(0)) | 0; return Math.abs(h) % 360; }
+const extOf = p => { const b = p.slice(p.lastIndexOf('/') + 1); const i = b.lastIndexOf('.'); return i > 0 ? b.slice(i + 1).toLowerCase() : b.toLowerCase(); };
+const colorOf = ext => EXT_COLORS[ext] || `hsl(${hashHue(ext)},65%,62%)`;
+const GLOW = ['64,255,160', '255,190,80', '255,80,90'].map(col => { // added, modified, deleted
+  const s = document.createElement('canvas'); s.width = s.height = 64;
+  const c = s.getContext('2d'), gr = c.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, `rgba(${col},1)`); gr.addColorStop(.35, `rgba(${col},.45)`); gr.addColorStop(1, `rgba(${col},0)`);
+  c.fillStyle = gr; c.fillRect(0, 0, 64, 64);
+  return s;
+});
+const AUTHOR_COLORS =['#ff6b9d','#7c5cff','#26d7ff','#ffd166','#06d6a0','#ff9f43','#f72585','#4cc9f0','#b8f35d','#ff5e5b'];
+
+/* ---------------- world ---------------- */
+let dirs, files, authors, beams, ci, simT, stats, extCount;
+const T0 = D.commits.length ? D.commits[0][0] : 0, T1 = D.commits.length ? D.commits[D.commits.length - 1][0] : 1;
+
+function reset(){
+  dirs = new Map(); files = new Map(); authors = new Map(); beams = []; ci = 0;
+  simT = T0 - DAY * 0.5; stats = {commits: 0, alive: 0}; extCount = new Map();
+  dirs.set('', {path: '', name: D.repo, parent: null, x: 0, y: 0, vx: 0, vy: 0, depth: 0, slots: [], live: 0, kids: 0, r: 8});
+  cam.x = 0; cam.y = 0; cam.z = 1.4;
+}
+
+function ensureDir(path){
+  let d = dirs.get(path);
+  if (d) return d;
+  const cut = path.lastIndexOf('/');
+  const parent = ensureDir(cut < 0 ? '' : path.slice(0, cut));
+  const a = Math.random() * TAU, dist = parent.r + 40;
+  d = {path, name: path.slice(cut + 1), parent, x: parent.x + Math.cos(a) * dist, y: parent.y + Math.sin(a) * dist,
+    vx: 0, vy: 0, depth: parent.depth + 1, slots: [], live: 0, kids: 0, r: 8};
+  parent.kids++;
+  dirs.set(path, d);
+  return d;
+}
+
+function slotPos(d, i){ // files spiral around their directory (sunflower layout)
+  const r = 6 + 5.2 * Math.sqrt(i + 1), a = i * GOLDEN;
+  return [d.x + Math.cos(a) * r, d.y + Math.sin(a) * r];
+}
+
+function addFile(pi, now){
+  let f = files.get(pi);
+  if (f && f.alive) { touch(f, 1, now); return f; }
+  const p = D.paths[pi], cut = p.lastIndexOf('/');
+  const d = ensureDir(cut < 0 ? '' : p.slice(0, cut));
+  let slot = d.slots.indexOf(null);
+  if (slot < 0) { slot = d.slots.length; d.slots.push(null); }
+  const ext = extOf(p);
+  f = {pi, d, slot, ext, color: colorOf(ext), alive: true, born: now, t: now, kind: 0, dying: 0};
+  d.slots[slot] = f; d.live++;
+  d.r = 6 + 5.2 * Math.sqrt(d.slots.length + 1);
+  files.set(pi, f); stats.alive++;
+  extCount.set(ext, (extCount.get(ext) || 0) + 1);
+  return f;
+}
+function touch(f, kind, now){ f.t = now; f.kind = kind; }
+function removeFile(pi, now){
+  const f = files.get(pi);
+  if (!f || !f.alive) return null;
+  f.alive = false; f.dying = now; f.kind = 2; f.t = now;
+  f.d.slots[f.slot] = null; f.d.live--;          // the slot can be reused; the ghost fades out in place
+  stats.alive--; extCount.set(f.ext, extCount.get(f.ext) - 1);
+  return f;
+}
+
+function authorOf(ai){
+  let a = authors.get(ai);
+  if (!a) {
+    const name = D.authors[ai];
+    const initials = name.split(/[\s._-]+/).filter(Boolean).slice(0, 2).map(s => s[0].toUpperCase()).join('') || '?';
+    a = {name, initials, color: AUTHOR_COLORS[ai % AUTHOR_COLORS.length], x: cam.x + (Math.random() - .5) * 400,
+      y: cam.y + (Math.random() - .5) * 400, tx: 0, ty: 0, commits: 0, last: 0, alpha: 0};
+    authors.set(ai, a);
+  }
+  return a;
+}
+
+function applyCommit(c, now){
+  const [, ai, ops] = c;
+  const a = authorOf(ai);
+  a.commits++; a.last = now; stats.commits++;
+  let sx = 0, sy = 0, n = 0;
+  for (const op of ops) {
+    const pi = op >> 2, kind = op & 3;
+    let f;
+    if (kind === 2) f = removeFile(pi, now);
+    else {
+      f = addFile(pi, now);              // adds the file, or just touches it if it already exists
+      f.kind = kind === 0 ? 0 : 1;
+    }
+    if (!f) continue;
+    const [x, y] = slotPos(f.d, f.slot);
+    sx += x; sy += y; n++;
+    if (beams.length < 900) beams.push({a, f, t: now});
+  }
+  if (n) { a.tx = sx / n; a.ty = sy / n; }
+}
+
+/* ---------------- physics ---------------- */
+// A directory is alive if it holds a file or an alive subdirectory. Dead branches leave the scene.
+function refreshAlive(){
+  const list = [...dirs.values()];
+  for (const d of list) { d.alive = d.live > 0 || !d.parent; d.aliveKids = 0; }
+  for (let i = list.length - 1; i > 0; i--) {   // children are always inserted after their parent
+    const d = list[i];
+    if (d.alive && d.parent) { d.parent.alive = true; d.parent.aliveKids++; }
+  }
+  return list.filter(d => d.alive);
+}
+function physics(dt){
+  const list = refreshAlive();
+  const cell = 160, grid = new Map();
+  for (const d of list) {
+    const k = Math.floor(d.x / cell) + ',' + Math.floor(d.y / cell);
+    (grid.get(k) || grid.set(k, []).get(k)).push(d);
+  }
+  for (const d of list) {
+    if (!d.parent) continue;
+    // spring to parent
+    const p = d.parent, dx = d.x - p.x, dy = d.y - p.y, dist = Math.hypot(dx, dy) || 1;
+    const want = p.r + d.r + 18 + Math.min(48, d.aliveKids * 3);
+    const fs = (dist - want) * 0.06;
+    d.vx -= dx / dist * fs; d.vy -= dy / dist * fs;
+    // push away from grandparent so branches fan outwards
+    if (p.parent) { const gx = d.x - p.parent.x, gy = d.y - p.parent.y, gd = Math.hypot(gx, gy) || 1; d.vx += gx / gd * 0.25; d.vy += gy / gd * 0.25; }
+    // local repulsion
+    const cx = Math.floor(d.x / cell), cy = Math.floor(d.y / cell);
+    for (let ix = -1; ix <= 1; ix++) for (let iy = -1; iy <= 1; iy++) {
+      const bucket = grid.get((cx + ix) + ',' + (cy + iy)); if (!bucket) continue;
+      for (const o of bucket) {
+        if (o === d) continue;
+        const ex = d.x - o.x, ey = d.y - o.y, e2 = ex * ex + ey * ey + 0.01, min = d.r + o.r + 18;
+        if (e2 < min * min * 2.56) { const e = Math.sqrt(e2), push = (min * 1.6 - e) * 0.08; d.vx += ex / e * push; d.vy += ey / e * push; }
+      }
+    }
+  }
+  const k = Math.min(1, dt * 60);
+  for (const d of list) {
+    if (!d.parent) { d.vx = d.vy = 0; continue; }
+    d.vx *= 0.82; d.vy *= 0.82;
+    d.x += d.vx * k; d.y += d.vy * k;
+  }
+  for (const a of authors.values()) {
+    a.x += (a.tx - a.x) * Math.min(1, dt * 2.2); a.y += (a.ty - a.y) * Math.min(1, dt * 2.2);
+  }
+}
+
+/* ---------------- camera ---------------- */
+const cam = {x: 0, y: 0, z: 1.4};
+function updateCamera(dt){
+  // frame the bulk of the tree (2nd–98th percentile), not the odd stray branch
+  const xs = [], ys = [];
+  for (const d of dirs.values()) { if (d.alive) { xs.push(d.x - d.r, d.x + d.r); ys.push(d.y - d.r, d.y + d.r); } }
+  if (!xs.length) return;
+  xs.sort((a, b) => a - b); ys.sort((a, b) => a - b);
+  const q = (arr, p) => arr[Math.min(arr.length - 1, Math.max(0, Math.round(p * (arr.length - 1))))];
+  const cut = xs.length > 40 ? 0.02 : 0;
+  const minX = q(xs, cut), maxX = q(xs, 1 - cut), minY = q(ys, cut), maxY = q(ys, 1 - cut);
+  const W = cv.width, H = cv.height, pad = 1.18;
+  const z = Math.min(2.2, Math.min(W / ((maxX - minX) * pad + 200), H / ((maxY - minY) * pad + 200)));
+  const s = Math.min(1, dt * 1.6);
+  cam.x += ((minX + maxX) / 2 - cam.x) * s; cam.y += ((minY + maxY) / 2 - cam.y) * s; cam.z += (z - cam.z) * s;
+}
+
+/* ---------------- render ---------------- */
+let showLabels = true;
+const easeOut = t => 1 - Math.pow(1 - Math.min(1, Math.max(0, t)), 3);
+function render(now){
+  const W = cv.width, H = cv.height, U = H / 1080; // UI scale
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.fillStyle = '#05060a'; g.fillRect(0, 0, W, H);
+  const vg = g.createRadialGradient(W / 2, H / 2, H * .1, W / 2, H / 2, H * .9);
+  vg.addColorStop(0, '#0d1020'); vg.addColorStop(1, '#05060a'); g.fillStyle = vg; g.fillRect(0, 0, W, H);
+
+  g.setTransform(cam.z, 0, 0, cam.z, W / 2 - cam.x * cam.z, H / 2 - cam.y * cam.z);
+  const px = 1 / cam.z;
+
+  // branches
+  g.lineWidth = 1.2 * px; g.strokeStyle = 'rgba(140,160,220,.22)'; g.beginPath();
+  for (const d of dirs.values()) { if (d.parent && d.alive) { g.moveTo(d.parent.x, d.parent.y); g.lineTo(d.x, d.y); } }
+  g.stroke();
+
+  // files
+  const dotR = Math.max(2.6, 2.2 / cam.z);
+  for (const f of files.values()) {
+    const age = (now - f.t) / DAY;
+    if (!f.alive) { const fade = (now - f.dying) / (DAY * 3); if (fade > 1) continue; g.globalAlpha = 1 - fade; }
+    const [x, y] = slotPos(f.d, f.slot);
+    g.fillStyle = f.color;
+    g.fillRect(x - dotR / 2 - .4, y - dotR / 2 - .4, dotR + .8, dotR + .8);
+    g.globalAlpha = 1;
+  }
+  // glows for recently touched files (pre-rendered sprites: cheap even for huge commits)
+  g.globalCompositeOperation = 'lighter';
+  for (const f of files.values()) {
+    const age = (now - f.t) / (DAY * 2.2);
+    if (age >= 1) continue;
+    const [x, y] = slotPos(f.d, f.slot);
+    const r = 6 + 10 * (1 - age);
+    g.globalAlpha = .9 * (1 - age);
+    g.drawImage(GLOW[f.kind] || GLOW[1], x - r, y - r, r * 2, r * 2);
+  }
+  g.globalAlpha = 1;
+  // beams
+  beams = beams.filter(b => now - b.t < DAY * 1.2);
+  for (const b of beams) {
+    const k = 1 - (now - b.t) / (DAY * 1.2);
+    const [x, y] = slotPos(b.f.d, b.f.slot);
+    g.strokeStyle = b.a.color; g.globalAlpha = .55 * k; g.lineWidth = 1.4 * px;
+    g.beginPath(); g.moveTo(b.a.x, b.a.y); g.lineTo(x, y); g.stroke();
+  }
+  g.globalAlpha = 1; g.globalCompositeOperation = 'source-over';
+
+  // directory labels
+  if (showLabels) {
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    for (const d of dirs.values()) {
+      if (!d.parent || !d.alive || d.depth > 2 || d.live + d.aliveKids < 3) continue;
+      const fsz = (d.depth === 1 ? 15 : 12) * U * px;
+      if (fsz * cam.z < 9) continue;
+      g.font = `600 ${fsz}px ui-sans-serif,system-ui,sans-serif`;
+      g.fillStyle = d.depth === 1 ? 'rgba(232,236,244,.85)' : 'rgba(232,236,244,.55)';
+      g.fillText(d.name, d.x, d.y - d.r - 8 * px);
+    }
+  }
+
+  // authors
+  for (const a of authors.values()) {
+    const idle = (now - a.last) / DAY;
+    a.alpha += ((idle < 10 ? 1 : 0) - a.alpha) * 0.08;
+    if (a.alpha < .02) continue;
+    const r = 11 * U * px;
+    g.globalAlpha = a.alpha;
+    const halo = g.createRadialGradient(a.x, a.y, 0, a.x, a.y, r * 3);
+    halo.addColorStop(0, a.color + 'aa'); halo.addColorStop(1, a.color + '00');
+    g.fillStyle = halo; g.beginPath(); g.arc(a.x, a.y, r * 3, 0, TAU); g.fill();
+    g.fillStyle = a.color; g.beginPath(); g.arc(a.x, a.y, r, 0, TAU); g.fill();
+    g.fillStyle = '#05060a'; g.font = `800 ${r * .95}px ui-sans-serif,system-ui,sans-serif`;
+    g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(a.initials, a.x, a.y + r * .05);
+    if (showLabels && idle < 2.5) { g.fillStyle = '#e8ecf4'; g.font = `600 ${12 * U * px}px ui-sans-serif,system-ui,sans-serif`; g.fillText(a.name, a.x, a.y + r + 11 * U * px); }
+    g.globalAlpha = 1;
+  }
+
+  hud(now, U);
+}
+
+function hud(now, U){
+  const W = cv.width, H = cv.height;
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  const m = 34 * U;
+  g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+  g.fillStyle = '#e8ecf4'; g.font = `800 ${30 * U}px ui-sans-serif,system-ui,sans-serif`;
+  g.fillText(D.title || D.repo, m, m + 26 * U);
+  const date = new Date(Math.min(now, T1) * 1000);
+  g.fillStyle = '#9aa4c4'; g.font = `600 ${18 * U}px ui-monospace,SFMono-Regular,Menlo,monospace`;
+  g.fillText(date.toLocaleDateString('en-GB', {day: '2-digit', month: 'short', year: 'numeric'}), m, m + 56 * U);
+  g.font = `600 ${14 * U}px ui-sans-serif,system-ui,sans-serif`; g.fillStyle = '#6f7a99';
+  g.fillText(`${stats.commits.toLocaleString('en')} commits · ${stats.alive.toLocaleString('en')} files · ${authors.size} contributors`, m, m + 82 * U);
+
+  // leaderboard
+  const top = [...authors.values()].sort((a, b) => b.commits - a.commits).slice(0, 6);
+  g.textAlign = 'right';
+  g.fillStyle = '#6f7a99'; g.font = `700 ${12 * U}px ui-sans-serif,system-ui,sans-serif`;
+  g.fillText('TOP CONTRIBUTORS', W - m, m + 10 * U);
+  top.forEach((a, i) => {
+    const y = m + (34 + i * 24) * U;
+    g.fillStyle = a.color; g.beginPath(); g.arc(W - m - 6 * U, y - 5 * U, 5 * U, 0, TAU); g.fill();
+    g.fillStyle = '#e8ecf4'; g.font = `600 ${14 * U}px ui-sans-serif,system-ui,sans-serif`;
+    g.fillText(a.name.length > 22 ? a.name.slice(0, 21) + '…' : a.name, W - m - 20 * U, y);
+    g.fillStyle = '#6f7a99'; g.font = `600 ${13 * U}px ui-monospace,monospace`;
+    g.fillText(a.commits, W - m - 210 * U, y);
+  });
+
+  // languages legend
+  const langs = [...extCount.entries()].filter(e => e[1] > 0).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  g.textAlign = 'left';
+  langs.forEach(([ext, n], i) => {
+    const y = H - m - 60 * U - (langs.length - 1 - i) * 20 * U;
+    g.fillStyle = colorOf(ext); g.fillRect(m, y - 9 * U, 10 * U, 10 * U);
+    g.fillStyle = '#9aa4c4'; g.font = `600 ${13 * U}px ui-monospace,monospace`;
+    g.fillText(`.${ext}  ${n}`, m + 18 * U, y);
+  });
+
+  // progress line + watermark
+  const p = (Math.min(now, T1) - T0) / Math.max(1, T1 - T0);
+  g.fillStyle = 'rgba(255,255,255,.08)'; g.fillRect(0, H - 4 * U, W, 4 * U);
+  const lg = g.createLinearGradient(0, 0, W, 0); lg.addColorStop(0, '#7c5cff'); lg.addColorStop(1, '#26d7ff');
+  g.fillStyle = lg; g.fillRect(0, H - 4 * U, W * p, 4 * U);
+  g.textAlign = 'right'; g.fillStyle = 'rgba(232,236,244,.35)'; g.font = `600 ${12 * U}px ui-sans-serif,system-ui,sans-serif`;
+  g.fillText('made with git-cinema', W - m, H - m + 6 * U);
+
+  // title & end cards
+  const intro = wall - startWall;
+  if (ci === 0 || intro < 2.5) {
+    const a = ci === 0 ? 1 : Math.max(0, 1 - (intro - 1.5));
+    if (a > 0) card(a, D.title || D.repo, `${new Date(T0 * 1000).getFullYear()} → ${new Date(T1 * 1000).getFullYear()} · ${D.commits.length.toLocaleString('en')} commits`, U);
+  }
+  if (finished) card(Math.min(1, (wall - finishedAt) / 1.2) * .92, `${stats.commits.toLocaleString('en')} commits`,
+    `${authors.size} contributors · ${stats.alive.toLocaleString('en')} files today`, U);
+}
+function card(alpha, title, sub, U){
+  const W = cv.width, H = cv.height;
+  g.globalAlpha = alpha * .75; g.fillStyle = '#05060a'; g.fillRect(0, 0, W, H); g.globalAlpha = alpha;
+  g.textAlign = 'center'; g.fillStyle = '#e8ecf4'; g.font = `800 ${64 * U}px ui-sans-serif,system-ui,sans-serif`;
+  g.fillText(title, W / 2, H / 2);
+  g.fillStyle = '#9aa4c4'; g.font = `600 ${22 * U}px ui-sans-serif,system-ui,sans-serif`; g.fillText(sub, W / 2, H / 2 + 44 * U);
+  g.fillStyle = '#6f7a99'; g.font = `600 ${15 * U}px ui-sans-serif,system-ui,sans-serif`; g.fillText('a git-cinema film', W / 2, H / 2 - 70 * U);
+  g.globalAlpha = 1;
+}
+
+/* ---------------- time ---------------- */
+// Default pacing: the whole history plays in ~80 s, long idle gaps are skipped.
+const span = Math.max(DAY, T1 - T0);
+const BASE_RATE = Math.max(DAY / 8, span / 80);   // seconds of history per real second
+let speed = 1, playing = true, wall = 0, startWall = 0, last = performance.now(), finished = false, finishedAt = 0;
+
+function step(dt){
+  if (!playing || finished) return;
+  const rate = BASE_RATE * speed;
+  simT += rate * dt;
+  // skip silence: jump ahead when nothing happens for a while
+  if (ci < D.commits.length && D.commits[ci][0] - simT > rate * 1.5) simT = D.commits[ci][0] - rate * 0.25;
+  while (ci < D.commits.length && D.commits[ci][0] <= simT) applyCommit(D.commits[ci++], D.commits[ci - 1][0]);
+  if (ci >= D.commits.length && simT > T1 + rate * 2.5) { finished = true; finishedAt = wall; onFinish(); }
+}
+
+function seek(frac){
+  const target = T0 + frac * (T1 - T0);
+  reset();
+  simT = target;
+  while (ci < D.commits.length && D.commits[ci][0] <= target) applyCommit(D.commits[ci++], D.commits[ci - 1][0]);
+  for (let i = 0; i < 240; i++) physics(1 / 60);         // settle the layout instantly
+  beams = [];
+  finished = false; startWall = wall - 10;
+  updateCamera(10);
+}
+
+function frame(t){
+  const dt = Math.min(0.05, (t - last) / 1000); last = t; wall += dt;
+  step(dt);
+  physics(dt);
+  updateCamera(dt);
+  render(Math.min(simT, T1 + DAY * 3));
+  ui();
+  requestAnimationFrame(frame);
+}
+
+/* ---------------- canvas size ---------------- */
+let fixedRes = null;
+function resize(){
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const [w, h] = fixedRes || [Math.round(innerWidth * dpr), Math.round(innerHeight * dpr)];
+  cv.width = w; cv.height = h;
+}
+addEventListener('resize', resize);
+
+/* ---------------- controls ---------------- */
+const $ = id => document.getElementById(id);
+function ui(){
+  const p = Math.max(0, Math.min(1, (Math.min(simT, T1) - T0) / Math.max(1, T1 - T0)));
+  $('fill').style.width = p * 100 + '%'; $('knob').style.left = p * 100 + '%';
+  $('play').textContent = playing && !finished ? '⏸' : '▶';
+}
+function togglePlay(){ if (finished) { seek(0); playing = true; startWall = wall; return; } playing = !playing; }
+$('play').onclick = togglePlay;
+$('speed').onchange = e => speed = +e.target.value;
+$('labels').onclick = () => showLabels = !showLabels;
+$('bar').onclick = e => { const r = e.currentTarget.getBoundingClientRect(); seek((e.clientX - r.left) / r.width); playing = true; };
+$('snap').onclick = snapshot;
+function snapshot(){
+  const a = document.createElement('a'); a.download = `${D.repo}-git-cinema.png`; a.href = cv.toDataURL('image/png'); a.click();
+}
+addEventListener('keydown', e => {
+  if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+  else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+    const p = (simT - T0) / Math.max(1, T1 - T0) + (e.key === 'ArrowRight' ? .05 : -.05);
+    seek(Math.max(0, Math.min(1, p)));
+  }
+  else if (e.key === '+' || e.key === '=') { const s = $('speed'); s.selectedIndex = Math.min(s.options.length - 1, s.selectedIndex + 1); speed = +s.value; }
+  else if (e.key === '-') { const s = $('speed'); s.selectedIndex = Math.max(0, s.selectedIndex - 1); speed = +s.value; }
+  else if (e.key.toLowerCase() === 'l') showLabels = !showLabels;
+  else if (e.key.toLowerCase() === 's') snapshot();
+});
+let hideT = null;
+addEventListener('mousemove', () => { $('ui').classList.remove('hide'); clearTimeout(hideT); hideT = setTimeout(() => recorder || $('ui').classList.add('hide'), 2500); });
+
+/* ---------------- recording ---------------- */
+let recorder = null, chunks = [];
+$('record').onclick = () => {
+  if (recorder) { recorder.stop(); return; }
+  if (!cv.captureStream || !window.MediaRecorder) return flash('Recording is not supported in this browser. Try Chrome, Edge or Firefox.');
+  // MP4 first: it uploads straight to X / LinkedIn. Falls back to WebM.
+  const type = ['video/mp4;codecs=avc1.640028', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
+    .find(t => MediaRecorder.isTypeSupported(t));
+  if (!type) return flash('No supported video format in this browser.');
+  fixedRes = [1920, 1080]; resize();
+  seek(0); startWall = wall; playing = true;
+  chunks = [];
+  recorder = new MediaRecorder(cv.captureStream(60), {mimeType: type, videoBitsPerSecond: 12e6});
+  recorder.ondataavailable = e => e.data.size && chunks.push(e.data);
+  recorder.onstop = () => {
+    const blob = new Blob(chunks, {type: type.split(';')[0]});
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = `${D.repo}-git-cinema.${type.includes('mp4') ? 'mp4' : 'webm'}`; a.click();
+    recorder = null; fixedRes = null; resize();
+    $('record').textContent = '● Record 1080p'; $('record').classList.remove('rec');
+  };
+  recorder.start(1000);
+  $('record').textContent = '■ Stop & save'; $('record').classList.add('rec');
+};
+function onFinish(){ if (recorder) setTimeout(() => recorder && recorder.stop(), 3000); }
+function flash(msg){ const m = $('msg'); m.textContent = msg; m.style.display = 'block'; setTimeout(() => m.style.display = 'none', 4000); }
+
+/* ---------------- go ---------------- */
+document.title = `${D.title || D.repo} · git-cinema`;
+resize(); reset();
+if (!D.commits.length) { playing = false; flash('No commits in this range.'); }
+const params = new URLSearchParams(location.search);
+if (params.has('speed')) speed = +params.get('speed') || 1;
+requestAnimationFrame(t => { last = t; requestAnimationFrame(frame); });
+window.__gitCinema = {get stats(){ return {...stats, dirs: dirs.size, authors: authors.size, ci, finished}; }, seek};
+</script>
+</body>
+</html>

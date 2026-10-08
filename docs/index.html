@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>git-cinema — turn any git history into a film</title>
+<meta name="description" content="One command turns any git repository into an animated film you can watch in the browser and export as a 1080p MP4. Zero dependencies.">
+<meta property="og:title" content="git-cinema — turn any git history into a film 🎬">
+<meta property="og:description" content="One command. A self-contained HTML film of your repo's history, exportable as 1080p video.">
+<meta property="og:image" content="https://cedricpoint.github.io/git-cinema/hero.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>">
+<style>
+:root{--bg:#05060a;--card:#0d1020;--line:#1f2440;--ink:#e8ecf4;--mute:#8d97b8;--a:#7c5cff;--b:#26d7ff}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:1000px;margin:0 auto;padding:48px 16px 60px}
+h1{font-size:clamp(40px,8vw,72px);line-height:1;letter-spacing:-.03em}
+h1 span{background:linear-gradient(90deg,var(--a),var(--b));-webkit-background-clip:text;background-clip:text;color:transparent}
+.lead{color:var(--mute);font-size:20px;max-width:56ch;margin:16px 0 28px}
+.hero{width:100%;border-radius:16px;border:1px solid var(--line);display:block;box-shadow:0 30px 80px rgba(124,92,255,.18)}
+.films{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));gap:14px;margin:28px 0}
+.film{display:block;text-decoration:none;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;transition:border-color .2s,transform .2s}
+.film:hover{border-color:var(--a);transform:translateY(-2px)}
+.film b{font-size:19px;display:block}.film span{color:var(--mute);font-size:14px}
+.film i{font-style:normal;float:right;font-size:28px}
+pre{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;overflow-x:auto;font:14px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;margin:12px 0 24px}
+h2{font-size:24px;margin-top:34px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:12px;margin-top:14px}
+.f{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}.f b{display:block}.f span{color:var(--mute);font-size:14px}
+a{color:var(--b)}
+footer{color:var(--mute);font-size:14px;text-align:center;margin-top:40px}
+</style>
+</head>
+<body>
+<main>
+  <h1>git <span>cinema</span> 🎬</h1>
+  <p class="lead">One command turns any git repository into a film. Directories grow into a living tree, files light up as they change, contributors fly around firing at their code. Export it as a 1080p MP4 and post it.</p>
+  <img class="hero" src="demo.gif" alt="git-cinema playing the history of Vite">
+
+  <div class="films">
+    <a class="film" href="express.html"><i>▶</i><b>Express</b><span>17 years · 5,637 commits · 383 contributors</span></a>
+    <a class="film" href="vite.html"><i>▶</i><b>Vite</b><span>last 3 years · 3,648 commits · 623 contributors</span></a>
+  </div>
+
+  <h2>Make your own</h2>
+<pre>git clone https://github.com/CedricPoint/git-cinema.git
+node git-cinema/git-cinema.js path/to/your/repo --open</pre>
+  <p>Node.js 18+ and git. No dependencies, nothing to install, nothing leaves your machine. You get one HTML file you can open, share or host anywhere.</p>
+
+  <div class="grid">
+    <div class="f"><b>● Record 1080p</b><span>Exports the whole film as MP4 (or WebM), straight from the browser.</span></div>
+    <div class="f"><b>⏯ Scrub through time</b><span>Seek, pause, change speed. Space, ← →, + −.</span></div>
+    <div class="f"><b>🕶 Anonymize</b><span><code>--anonymize</code> replaces names with “Dev 1, Dev 2…” for private repos.</span></div>
+    <div class="f"><b>⚡ Fast</b><span>Express's 17 years render in 0.2 s, into a 200 KB file.</span></div>
+  </div>
+
+  <footer><a href="https://github.com/CedricPoint/git-cinema">github.com/CedricPoint/git-cinema</a> · MIT</footer>
+</main>
+</body>
+</html>
